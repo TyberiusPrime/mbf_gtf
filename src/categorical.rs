@@ -38,6 +38,9 @@ impl ToPyObject for Categorical {
 */
 impl IntoPyObject for Categorical {
     fn into_object(self, py: Python) -> PyObject {
-        (self.values.into_object(py), self.cats.into_object(py)).into_object(py)
+        let mut sorted: Vec<(&String, &u32)> = self.cats.iter().collect();
+        sorted.sort_by(|a, b| a.1.cmp(b.1));
+        let cats: Vec<String> = sorted.iter().map( | a | a.0.clone()).collect();
+        (self.values.into_object(py), cats.into_object(py)).into_object(py)
     }
 }
