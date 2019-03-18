@@ -20,6 +20,13 @@ impl Categorical {
         }
     }
 
+    pub fn new_empty(count: u32) -> Categorical { 
+        let mut res = Categorical::new();
+        res.cats.insert("".to_string(), 0);
+        res.values.resize(count as usize, 0);
+        res
+    }
+
     pub fn push(&mut self, value: &str) -> () {
         let next = self.cats.len() as u32;
         let no = match self.cats.entry(value.to_string()) {
@@ -40,7 +47,7 @@ impl IntoPyObject for Categorical {
     fn into_object(self, py: Python) -> PyObject {
         let mut sorted: Vec<(&String, &u32)> = self.cats.iter().collect();
         sorted.sort_by(|a, b| a.1.cmp(b.1));
-        let cats: Vec<String> = sorted.iter().map( | a | a.0.clone()).collect();
+        let cats: Vec<String> = sorted.iter().map(|a| a.0.clone()).collect();
         (self.values.into_object(py), cats.into_object(py)).into_object(py)
     }
 }
