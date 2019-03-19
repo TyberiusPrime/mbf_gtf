@@ -8,6 +8,7 @@ use pyo3::prelude::*;
 use pyo3::wrap_pyfunction;
 use pyo3::{PyErr, PyResult};
 use std::collections::{HashMap, HashSet};
+use std::io::BufRead;
 
 use pyo3::exceptions::ValueError;
 use serde::Deserialize;
@@ -15,6 +16,7 @@ use std::fs::File;
 
 use serde::{de, Deserializer};
 use std::iter::FromIterator;
+use std::error;
 
 //use pyo3::types::PyTuple;
 
@@ -120,127 +122,132 @@ fn new_resized_string_vector(count: u32, value: String) -> Vec<String> {
     res
 }
 
-fn inner_parse_ensembl_gtf(
-    filename: &str,
-    accepted_features: HashSet<String>,
-) -> Result<HashMap<String, GTFEntrys>, csv::Error> {
-    let mut out: HashMap<String, GTFEntrys> = HashMap::new();
-
+fn inner_parse_ensembl_gtf_manual(filename: &str, accepted_features: HashSet<String>) 
+        -> Result<HashMap<String, GTFEntrys>, Box<error::Error>> 
+{
     let f = File::open(filename)?;
-    let mut rdr = csv::ReaderBuilder::new()
-        .delimiter(b'\t')
-        .comment(Some(b'#'))
-        .has_headers(false)
-        .from_reader(f);
-    for result in rdr.records() {
-        let row = result?;
-        let parsed_row: EnsemblGTFRecord = row.deserialize(None)?;
-        if !out.contains_key(parsed_row.feature) {
-            if (accepted_features.len() > 0) && (!accepted_features.contains(parsed_row.feature)) {
+    let f = std::io::BufReader::new(f);
+    let mut out: HashMap<String, GTFEntrys> = HashMap::new();
+    for line in f.lines() {
+        let line = line?;
+        if line.starts_with('#') || line.len() == 0 {
+            continue;
+        }
+        let mut parts = line.splitn(9, "\t");
+        let seqname = parts.next().ok_or("Failed to find seqname")?;
+        parts.next(); //consume source
+        let feature = parts.next().ok_or("Failed to find feature")?;
+        if !out.contains_key(feature) {
+            if (accepted_features.len() > 0) && (!accepted_features.contains(feature)) {
                 continue;
             }
             let hm: GTFEntrys = GTFEntrys::new();
-            out.insert(parsed_row.feature.to_string(), hm);
+            out.insert(feature.to_string(), hm);
         }
-        if let Some(target) = out.get_mut(parsed_row.feature) {
-            target.seqname.push(parsed_row.seqname);
-            target.start.push(parsed_row.start);
-            target.end.push(parsed_row.end);
-            target.strand.push(parsed_row.strand);
-            let mut tag_count = 0;
-            let it = parsed_row
-                .attributes
+        let start: u64 = parts.next().ok_or("Failed to find start")?.parse()?;
+        let end: u64 = parts.next().ok_or("Failed to find start")?.parse()?;
+        parts.next(); //consume score
+        let strand = parts.next().ok_or("Failed to find start")?;
+        let strand:i8 = if strand == "+" { 1 } else if strand == "-" {-1} else {0};
+        let mut target = out.get_mut(feature).unwrap();
+        target.seqname.push(seqname);
+        target.start.push(start);
+        target.end.push(end);
+        target.strand.push(strand);
+        let mut tag_count = 0;
+        parts.next(); //consume frame
+        let attributes = parts.next().ok_or("Failed to find attributes")?;
+        let it = attributes
                 .split_terminator(';')
                 .map(|x| x.trim_start())
                 .filter(|x| x.len() > 0);
-            for attr_value in it {
-                let mut kv = attr_value.splitn(2, ' ');
-                let mut key = kv.next().unwrap();
-                if key == "tag" {
-                    if tag_count == 0 {
-                        key = "tag0"
-                    } else if tag_count == 1 {
-                        key = "tag1"
-                    } else if tag_count == 2 {
-                        key = "tag2"
+        for attr_value in it {
+            let mut kv = attr_value.splitn(2, ' ');
+            let mut key = kv.next().unwrap();
+            if key == "tag" {
+                if tag_count == 0 {
+                    key = "tag0"
+                } else if tag_count == 1 {
+                    key = "tag1"
+                } else if tag_count == 2 {
+                    key = "tag2"
                     } else if tag_count == 3 {
-                        key = "tag3"
+                    key = "tag3"
                     } else if tag_count == 4 {
-                        key = "tag4"
+                    key = "tag4"
                     } else if tag_count == 5 {
-                        key = "tag5"
-                    } else {
-                        continue; // silently swallow further tags
-                    }
-                    tag_count += 1;
-
-                    //key +=
-                }
-                //if (key == "gene_id") | (key == "transcript_id") | (key == "exon_id") | (key == "gene_name") | (key=="transcript_name") {
-                if (parsed_row.feature == "exon")
-                    & ((key == "gene_biotype")
-                        | (key == "gene_version")
-                        | (key == "transcript_version")
-                        | (key == "gene_name")
-                        | (key == "gene_source")
-                        | (key == "transcript_name")
-                        | (key == "transcript_source")
-                        | (key == "transcript_biotype")
-                        | (key == "transcript_support_level"))
-                {
-                    continue;
-                } else if (parsed_row.feature == "transcript")
-                    & ((key == "gene_version")
-                        | (key == "gene_name")
-                        | (key == "gene_source")
-                        | (key == "gene_biotype")
-                        | (key == "transcript_source"))
-                {
-                    continue;
-                }
-
-                let value = kv.next().unwrap().trim_matches('"');
-                if key.ends_with("_id") {
-                    target
-                        .vec_attributes
-                        .get_mut(key)
-                        .map(|at| {
-                            at.push(value.to_string());
-                        })
-                        .unwrap_or_else(|| {
-                            target.vec_attributes.insert(
-                                key.to_string(),
-                                new_resized_string_vector(target.count, value.to_string()),
-                            );
-                        });
+                    key = "tag5"
                 } else {
-                    target
-                        .cat_attributes
-                        .get_mut(key)
-                        .map(|at| {
-                            at.push(value);
-                        })
-                        .unwrap_or_else(|| {
-                            target.cat_attributes.insert(
-                                key.to_string(),
-                                Categorical::new_empty_push(target.count, value),
-                            );
-                        });
+                    continue; // silently swallow further tags
                 }
+                tag_count += 1;
             }
-            target.count += 1;
-            for (_key, value) in target.cat_attributes.iter_mut() {
-                if (value.len() as u32) < target.count {
-                    value.push("");
-                }
+            /*if (feature == "exon")
+                & ((key == "gene_biotype")
+                    | (key == "gene_version")
+                    | (key == "transcript_version")
+                    | (key == "gene_name")
+                    | (key == "gene_source")
+                    | (key == "transcript_name")
+                    | (key == "transcript_source")
+                    | (key == "transcript_biotype")
+                    | (key == "transcript_support_level"))
+            {
+                continue;
+            } else if (feature == "transcript")
+                & ((key == "gene_version")
+                    | (key == "gene_name")
+                    | (key == "gene_source")
+                    | (key == "gene_biotype")
+                    | (key == "transcript_source"))
+            {
+                continue;
             }
-            for (_key, value) in target.vec_attributes.iter_mut() {
-                if (value.len() as u32) < target.count {
-                    value.push("".to_string());
-                }
+            */
+
+            let value = kv.next().unwrap().trim_matches('"');
+            if false & key.ends_with("_id") {
+                target
+                    .vec_attributes
+                    .get_mut(key)
+                    .map(|at| {
+                        at.push(value.to_string());
+                    })
+                    .unwrap_or_else(|| {
+                        target.vec_attributes.insert(
+                            key.to_string(),
+                            new_resized_string_vector(target.count, value.to_string()),
+                        );
+                    });
+            } else {
+                target
+                    .cat_attributes
+                    .get_mut(key)
+                    .map(|at| {
+                        at.push(value);
+                    })
+                    .unwrap_or_else(|| {
+                        target.cat_attributes.insert(
+                            key.to_string(),
+                            Categorical::new_empty_push(target.count, value),
+                        );
+                    });
+            }
+        }
+        target.count += 1;
+        for (_key, value) in target.cat_attributes.iter_mut() {
+            if (value.len() as u32) < target.count {
+                value.push("");
+            }
+        }
+        for (_key, value) in target.vec_attributes.iter_mut() {
+            if (value.len() as u32) < target.count {
+                value.push("".to_string());
             }
         }
     }
+
+
     Ok(out)
 }
 
@@ -252,7 +259,7 @@ fn parse_ensembl_gtf(
 ) -> PyResult<HashMap<String, GTFEntrys>> {
     let hm_accepted_features: HashSet<String> =
         HashSet::from_iter(accepted_features.iter().cloned());
-    let parse_result = inner_parse_ensembl_gtf(filename, hm_accepted_features);
+    let parse_result = inner_parse_ensembl_gtf_manual(filename, hm_accepted_features);
     match parse_result {
         Ok(r) => return Ok(r),
         Err(e) => return Err(PyErr::new::<ValueError, _>(e.to_string())),
