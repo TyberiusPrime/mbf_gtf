@@ -1,16 +1,13 @@
 #![feature(nll)]
-extern crate regex;
 extern crate pyo3;
 //#[macro_use]
 extern crate serde;
 extern crate serde_derive;
-#[macro_use] extern crate lazy_static;
 
 use pyo3::prelude::*;
 use pyo3::wrap_pyfunction;
 use pyo3::{PyErr, PyResult};
 use std::collections::{HashMap, HashSet};
-use regex::{Regex, CaptureMatches};
 
 use pyo3::exceptions::ValueError;
 use serde::Deserialize;
@@ -23,24 +20,6 @@ use std::iter::FromIterator;
 
 mod categorical;
 use categorical::Categorical;
-
-enum GTFColumn {
-    Categorical(Categorical),
-    Vu64(Vec<u64>),
-    Vf32(Vec<f32>),
-    Vi8(Vec<i8>),
-}
-
-impl IntoPyObject for GTFColumn {
-    fn into_object(self, py: Python) -> PyObject {
-        match self {
-            GTFColumn::Categorical(s) => s.into_object(py),
-            GTFColumn::Vu64(s) => s.into_object(py),
-            GTFColumn::Vf32(s) => s.into_object(py),
-            GTFColumn::Vi8(s) => s.into_object(py),
-        }
-    }
-}
 
 #[derive(Deserialize, Debug)]
 struct EnsemblGTFRecord<'a> {
@@ -97,32 +76,45 @@ where
     }
 }
 
-
-fn parse_attributes(row: &str) -> CaptureMatches {
-    let mut result: HashMap<&str, &str> = HashMap::new();
-    result.insert("default", "hello");
-     lazy_static! {
-        static ref SEARCHER: Regex = Regex::new("([a-z_]+) \"([^\"]+)\";").unwrap();
-    }
-     return SEARCHER.captures_iter(row);
+struct GTFEntrys {
+    seqname: Categorical,
+    start: Vec<u64>,
+    end: Vec<u64>,
+    strand: Vec<i8>,
+    attributes: HashMap<String, Categorical>,
+    count: u32,
 }
 
-fn parse_ensembl_gtf(
-    filename: &str,
-    include_ssf: bool,
-    accepted_features: Option<HashSet<String>>,
-) -> Result<HashMap<String, GTFColumn>, csv::Error> {
-    let mut out: HashMap<String, GTFColumn> = HashMap::new();
+impl GTFEntrys {
+    pub fn new() -> GTFEntrys {
+        GTFEntrys {
+            seqname: Categorical::new(),
+            start: Vec::new(),
+            end: Vec::new(),
+            strand: Vec::new(),
+            attributes: HashMap::new(),
+            count: 0,
+        }
+    }
+}
 
-    let mut seqname = Categorical::new();
-    let mut source = Categorical::new();
-    let mut feature = Categorical::new();
-    let mut start: Vec<u64> = Vec::new();
-    let mut end: Vec<u64> = Vec::new();
-    let mut score: Vec<f32> = Vec::new();
-    let mut strand: Vec<i8> = Vec::new();
-    let mut frame: Vec<i8> = Vec::new();
-    let mut attributes: HashMap<String, Categorical> = HashMap::new();
+impl IntoPyObject for GTFEntrys {
+    fn into_object(self, py: Python) -> PyObject {
+        let mut hm = HashMap::new();
+        hm.insert("seqname", self.seqname.into_object(py));
+        hm.insert("start", self.start.into_object(py));
+        hm.insert("end", self.end.into_object(py));
+        hm.insert("strand", self.strand.into_object(py));
+        hm.insert("attributes", self.attributes.into_object(py));
+        hm.into_object(py)
+    }
+}
+
+fn inner_parse_ensembl_gtf(
+    filename: &str,
+    accepted_features: HashSet<String>,
+) -> Result<HashMap<String, GTFEntrys>, csv::Error> {
+    let mut out: HashMap<String, GTFEntrys> = HashMap::new();
 
     let f = File::open(filename)?;
     let mut rdr = csv::ReaderBuilder::new()
@@ -130,81 +122,83 @@ fn parse_ensembl_gtf(
         .comment(Some(b'#'))
         .has_headers(false)
         .from_reader(f);
-    let mut count = 0;
     for result in rdr.records() {
         let row = result?;
         let parsed_row: EnsemblGTFRecord = row.deserialize(None)?;
-        let keep = match &accepted_features {
-            Some(af) => af.contains(parsed_row.feature),
-            None => true,
-        };
-        if keep {
-            seqname.push(parsed_row.seqname);
-            feature.push(parsed_row.feature);
-            start.push(parsed_row.start);
-            end.push(parsed_row.end);
-            strand.push(parsed_row.strand);
-            if include_ssf {
-                source.push(parsed_row.source);
-                score.push(parsed_row.score);
-                frame.push(parsed_row.frame);
+        if !out.contains_key(parsed_row.feature) {
+            if (accepted_features.len() > 0) && (!accepted_features.contains(parsed_row.feature)) {
+                continue;
             }
-            let mut seen : HashSet<String>= HashSet::new();
-            for cap in parse_attributes(parsed_row.attributes) {
-                let mut key = cap[1].to_string();
-                while seen.contains(&key) {
-                    key = key + "_"
+            let hm: GTFEntrys = GTFEntrys::new();
+            out.insert(parsed_row.feature.to_string(), hm);
+        }
+        if let Some(target) = out.get_mut(parsed_row.feature) {
+            target.seqname.push(parsed_row.seqname);
+            target.start.push(parsed_row.start);
+            target.end.push(parsed_row.end);
+            target.strand.push(parsed_row.strand);
+            let mut tag_count = 0;
+            let it = parsed_row
+                .attributes
+                .split_terminator(';')
+                .map(|x| x.trim_start())
+                .filter(|x| x.len() > 0);
+            for attr_value in it {
+                let mut kv = attr_value.splitn(2, ' ');
+                let mut key = kv.next().unwrap();
+                let value = kv.next().unwrap().trim_matches('"');
+                if key == "tag" {
+                    if tag_count == 0{
+                        key = "tag0"
                 }
-                let att_vec = &mut attributes
-                    .entry(key.to_string())
-                    .or_insert_with(|| Categorical::new_empty(count));
-                att_vec.push(&cap[2]);
-                seen.insert(key.to_string());
+                    else if tag_count == 1
+                    {
+                        key = "tag1"
+                }
+                    else if tag_count == 2{
+                        key = "tag2"
+                }
+                    else {
+                        continue; // silently swallow further tags
+                    }
+                    tag_count += 1;
+
+                    //key +=
+                }
+                target
+                .attributes
+                    .get_mut(key)
+                    .map(|at| {
+                        at.push(value);
+                    })
+                .unwrap_or_else(|| {
+                    target.attributes.insert(
+                        key.to_string(),
+                        Categorical::new_empty_push(target.count, value),
+                        );
+                });
+
             }
-            for (key, value) in attributes.iter_mut() {
-                if !seen.contains(key) {
+            target.count += 1;
+            for (_key, value) in target.attributes.iter_mut() {
+                if (value.len() as u32) < target.count{
                     value.push("");
                 }
             }
-            count += 1;
         }
     }
-
-    out.insert("seqname".to_string(), GTFColumn::Categorical(seqname));
-    out.insert("feature".to_string(), GTFColumn::Categorical(feature));
-    out.insert("start".to_string(), GTFColumn::Vu64(start));
-    out.insert("stop".to_string(), GTFColumn::Vu64(end));
-    out.insert("strand".to_string(), GTFColumn::Vi8(strand));
-    if include_ssf {
-        out.insert("source".to_string(), GTFColumn::Categorical(source));
-        out.insert("score".to_string(), GTFColumn::Vf32(score));
-        out.insert("frame".to_string(), GTFColumn::Vi8(frame));
-    }
-    //update out from attributes
-    for (k, v) in attributes.drain() {
-        let key = "attribute_".to_string() + &k;
-        out.insert(key, GTFColumn::Categorical(v));
-    }
-
     Ok(out)
 }
 
 #[pyfunction]
 //return a categorical
-fn return_a_categorical(
+fn parse_ensembl_gtf(
     filename: &str,
-    include_ssf: bool,
     accepted_features: Vec<String>,
-) -> PyResult<HashMap<String, GTFColumn>> {
+) -> PyResult<HashMap<String, GTFEntrys>> {
     let hm_accepted_features: HashSet<String> =
         HashSet::from_iter(accepted_features.iter().cloned());
-    let hmo_accepted_features;
-    if hm_accepted_features.len() > 0 {
-        hmo_accepted_features = Some(hm_accepted_features);
-    } else {
-        hmo_accepted_features = None;
-    }
-    let parse_result = parse_ensembl_gtf(filename, include_ssf, hmo_accepted_features);
+    let parse_result = inner_parse_ensembl_gtf(filename, hm_accepted_features);
     match parse_result {
         Ok(r) => return Ok(r),
         Err(e) => return Err(PyErr::new::<ValueError, _>(e.to_string())),
@@ -214,7 +208,7 @@ fn return_a_categorical(
 /// This module is a python module implemented in Rust.
 #[pymodule]
 fn mbf_gtf(_py: Python, m: &PyModule) -> PyResult<()> {
-    m.add_wrapped(wrap_pyfunction!(return_a_categorical))?;
+    m.add_wrapped(wrap_pyfunction!(parse_ensembl_gtf))?;
 
     Ok(())
 }

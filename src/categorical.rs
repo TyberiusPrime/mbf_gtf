@@ -20,10 +20,17 @@ impl Categorical {
         }
     }
 
-    pub fn new_empty(count: u32) -> Categorical { 
+    pub fn new_empty(count: u32) -> Categorical {
         let mut res = Categorical::new();
-        res.cats.insert("".to_string(), 0);
-        res.values.resize(count as usize, 0);
+        if count > 0 {
+            res.cats.insert("".to_string(), 0);
+            res.values.resize(count as usize, 0);
+        }
+        res
+    }
+    pub fn new_empty_push(count: u32, value: &str) -> Categorical {
+        let mut res = Categorical::new_empty(count);
+        res.push(value);
         res
     }
 
@@ -34,6 +41,10 @@ impl Categorical {
             Occupied(entry) => entry.into_mut(),
         };
         self.values.push(*no);
+    }
+
+    pub fn len(&self) -> usize {
+        self.values.len()
     }
 }
 /*
