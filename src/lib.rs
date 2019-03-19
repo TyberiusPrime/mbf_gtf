@@ -81,7 +81,8 @@ struct GTFEntrys {
     start: Vec<u64>,
     end: Vec<u64>,
     strand: Vec<i8>,
-    attributes: HashMap<String, Categorical>,
+    cat_attributes: HashMap<String, Categorical>,
+    vec_attributes: HashMap<String, Vec<String>>,
     count: u32,
 }
 
@@ -92,7 +93,8 @@ impl GTFEntrys {
             start: Vec::new(),
             end: Vec::new(),
             strand: Vec::new(),
-            attributes: HashMap::new(),
+            cat_attributes: HashMap::new(),
+            vec_attributes: HashMap::new(),
             count: 0,
         }
     }
@@ -105,9 +107,17 @@ impl IntoPyObject for GTFEntrys {
         hm.insert("start", self.start.into_object(py));
         hm.insert("end", self.end.into_object(py));
         hm.insert("strand", self.strand.into_object(py));
-        hm.insert("attributes", self.attributes.into_object(py));
+        hm.insert("cat_attributes", self.cat_attributes.into_object(py));
+        hm.insert("vec_attributes", self.vec_attributes.into_object(py));
         hm.into_object(py)
     }
+}
+
+fn new_resized_string_vector(count: u32, value: String) -> Vec<String> {
+    let mut res = Vec::new();
+    res.resize(count as usize, "".to_string());
+    res.push(value);
+    res
 }
 
 fn inner_parse_ensembl_gtf(
@@ -146,43 +156,87 @@ fn inner_parse_ensembl_gtf(
             for attr_value in it {
                 let mut kv = attr_value.splitn(2, ' ');
                 let mut key = kv.next().unwrap();
-                let value = kv.next().unwrap().trim_matches('"');
                 if key == "tag" {
-                    if tag_count == 0{
+                    if tag_count == 0 {
                         key = "tag0"
-                }
-                    else if tag_count == 1
-                    {
+                    } else if tag_count == 1 {
                         key = "tag1"
-                }
-                    else if tag_count == 2{
+                    } else if tag_count == 2 {
                         key = "tag2"
-                }
-                    else {
+                    } else if tag_count == 3 {
+                        key = "tag3"
+                    } else if tag_count == 4 {
+                        key = "tag4"
+                    } else if tag_count == 5 {
+                        key = "tag5"
+                    } else {
                         continue; // silently swallow further tags
                     }
                     tag_count += 1;
 
                     //key +=
                 }
-                target
-                .attributes
-                    .get_mut(key)
-                    .map(|at| {
-                        at.push(value);
-                    })
-                .unwrap_or_else(|| {
-                    target.attributes.insert(
-                        key.to_string(),
-                        Categorical::new_empty_push(target.count, value),
-                        );
-                });
+                //if (key == "gene_id") | (key == "transcript_id") | (key == "exon_id") | (key == "gene_name") | (key=="transcript_name") {
+                if (parsed_row.feature == "exon")
+                    & ((key == "gene_biotype")
+                        | (key == "gene_version")
+                        | (key == "transcript_version")
+                        | (key == "gene_name")
+                        | (key == "gene_source")
+                        | (key == "transcript_name")
+                        | (key == "transcript_source")
+                        | (key == "transcript_biotype")
+                        | (key == "transcript_support_level"))
+                {
+                    continue;
+                } else if (parsed_row.feature == "transcript")
+                    & ((key == "gene_version")
+                        | (key == "gene_name")
+                        | (key == "gene_source")
+                        | (key == "gene_biotype")
+                        | (key == "transcript_source"))
+                {
+                    continue;
+                }
 
+                let value = kv.next().unwrap().trim_matches('"');
+                if key.ends_with("_id") {
+                    target
+                        .vec_attributes
+                        .get_mut(key)
+                        .map(|at| {
+                            at.push(value.to_string());
+                        })
+                        .unwrap_or_else(|| {
+                            target.vec_attributes.insert(
+                                key.to_string(),
+                                new_resized_string_vector(target.count, value.to_string()),
+                            );
+                        });
+                } else {
+                    target
+                        .cat_attributes
+                        .get_mut(key)
+                        .map(|at| {
+                            at.push(value);
+                        })
+                        .unwrap_or_else(|| {
+                            target.cat_attributes.insert(
+                                key.to_string(),
+                                Categorical::new_empty_push(target.count, value),
+                            );
+                        });
+                }
             }
             target.count += 1;
-            for (_key, value) in target.attributes.iter_mut() {
-                if (value.len() as u32) < target.count{
+            for (_key, value) in target.cat_attributes.iter_mut() {
+                if (value.len() as u32) < target.count {
                     value.push("");
+                }
+            }
+            for (_key, value) in target.vec_attributes.iter_mut() {
+                if (value.len() as u32) < target.count {
+                    value.push("".to_string());
                 }
             }
         }
