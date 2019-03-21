@@ -2,16 +2,17 @@
 extern crate pyo3;
 extern crate hashbrown;
 
-
-use pyo3::prelude::*;
-use pyo3::wrap_pyfunction;
-use pyo3::{PyErr, PyResult};
-use pyo3::exceptions::ValueError;
 use std::collections::HashMap as RustHashMap;
 use std::fs::File;
 use std::io::BufRead;
 use std::error;
 use std::iter::FromIterator;
+
+use pyo3::prelude::*;
+use pyo3::wrap_pyfunction;
+use pyo3::{PyErr, PyResult};
+use pyo3::exceptions::ValueError;
+use pyo3::types::{PyDict, PyTuple};
 
 use hashbrown::{HashMap, HashSet}; //hashbrown offers a very modest speedup of about 0.7 seconds (from 10.28 to 9.5) 
 
@@ -204,18 +205,55 @@ fn inner_parse_ensembl_gtf(
     Ok(res)
 }
 
+/// parse_ensembl_gtf
+///
+/// parse a Ensembl GTF file to a dict of DataFrames
+///
+/// # arguments
+/// `filename - A filename (uncompressed gtf)
+/// `accepted_features` - a list of features to fetch, or an empty list for all 
 #[pyfunction]
-//return a categorical
 fn parse_ensembl_gtf(
     filename: &str,
     accepted_features: Vec<String>,
-) -> PyResult<RustHashMap<String, GTFEntrys>> {
+) -> PyResult<PyObject> {
     let hm_accepted_features: HashSet<String> =
         HashSet::from_iter(accepted_features.iter().cloned());
     let parse_result = inner_parse_ensembl_gtf(filename, hm_accepted_features);
-    match parse_result {
-        Ok(r) => Ok(r),
-        Err(e) => Err(PyErr::new::<ValueError, _>(e.to_string())),
+    let parse_result = match parse_result {
+        Ok(r) => r,
+        Err(e) => return Err(PyErr::new::<ValueError, _>(e.to_string())),
+    };
+    let gil = Python::acquire_gil();
+    let py = gil.python();
+    let locals = PyDict::new(py);
+    py.run("
+    
+def all_to_pandas(dict_of_frames):
+    result = {}
+    for k, frame in dict_of_frames.items():
+        d = {
+            'seqname': pd.Categorical.from_codes(frame['seqname'][0], frame['seqname'][1]),
+            'start': frame['start'],
+            'end': frame['end'],
+            'strand': frame['strand'],
+        }
+        for c in frame['cat_attributes']:
+            x = pd.Categorical.from_codes(
+                    frame['cat_attributes'][c][0], frame['cat_attributes'][c][1]
+                )
+            d[c] = x
+        for c in frame['vec_attributes']:
+            d[c] = frame['vec_attributes'][c]
+        result[k] = pd.DataFrame(d)
+    return result
+    ", None, Some(locals))?;
+    let all_to_pandas = locals.get_item("all_to_pandas").unwrap();
+    let args = PyTuple::new(py, &[parse_result.into_object(py)]);
+    let result = all_to_pandas.call1(args);
+    match result {
+        Ok(r) => Ok(r.to_object(py)),
+        Err(e) => Err(e)
     }
 }
 
