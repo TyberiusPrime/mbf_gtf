@@ -39,7 +39,7 @@ impl Categorical {
         res
     }
 
-    pub fn push(&mut self, value: &str) -> () {
+    pub fn push(&mut self, value: &str) {
         if value != self.last {
             // this little trick saves 2 allocations and about 2 seconds
             let next = self.cats.len() as u32;

@@ -67,9 +67,9 @@ impl IntoPyObject for GTFEntrys {
     }
 }
 
-//a helper that creates a vector, fills it with empty strings up to count
-//then adds value
-//similar to Categorical.new_empty_push
+/// a helper that creates a vector, fills it with empty strings up to count
+/// then adds value
+/// similar to Categorical.new_empty_push
 fn vector_new_empty_push(count: u32, value: String) -> Vec<String> {
     let mut res = Vec::new();
     res.resize(count as usize, "".to_string());
@@ -77,114 +77,10 @@ fn vector_new_empty_push(count: u32, value: String) -> Vec<String> {
     res
 }
 
-fn inner_parse_ensembl_gtf_manual(
+fn inner_parse_ensembl_gtf(
     filename: &str,
     accepted_features: HashSet<String>,
 ) -> Result<RustHashMap<String, GTFEntrys>, Box<error::Error>> {
-    /*
-    let input: String = std::fs::read_to_string(filename)?;
-    let mut out: HashMap<String, GTFEntrys> = HashMap::new();
-
-    let mut mode = 0;
-    let mut count = 0;
-    let mut offset:usize = 0;
-    let mut last_start:usize = 0;
-    let mut seqname: &str = "";
-    let mut feature: &str = "";
-    let mut start: u64 = 0;
-    let mut stop: u64 = 0;
-    let mut strand: i8 = 0;
-    let mut attribute_name: &str = "";
-    let mut attribute_value: &str = "";
-    let mut attributes: HashMap<&str, &str> = HashMap::new();
-    let bts = input.into_bytes();
-    let last_b: u8 = 0;
-    for b in bts.iter(){
-        if (mode == 0) && (*b == ('\t' as u8)) { //read seqname
-            seqname = std::str::from_utf8(&bts[last_start..offset])?;
-            last_start = offset+1;
-            mode = 1;
-        }
-        else if (mode == 1) && (*b == ('\t' as u8)) { //red source
-            //source = std::str::from_utf8(&bts[last_start..offset])?; 
-            last_start = offset+1;
-            mode = 2;
-        }
-        else if (mode == 2) && (*b == ('\t' as u8)) { //read feature
-            feature = std::str::from_utf8(&bts[last_start..offset])?;
-            last_start = offset+1;
-            mode = 3;
-        }
-        else if (mode == 3) && (*b == ('\t' as u8)) { //read start
-            start = std::str::from_utf8(&bts[last_start..offset])?.parse()?;
-            last_start = offset+1;
-            mode = 4;
-        }
-        else if (mode == 4) && (*b == ('\t' as u8)) { //read stop
-            stop = std::str::from_utf8(&bts[last_start..offset])?.parse()?;
-            last_start = offset+1;
-            mode = 5;
-        }
-        else if (mode == 5) && (*b == ('\t' as u8)) { //read score
-            last_start = offset+1;
-            mode = 6;
-        }
-        else if (mode == 6) && (*b == ('\t' as u8)) { //read strand
-            if bts[last_start] == '+' as u8 {
-                strand = 1;
-            }
-            else if bts[last_start] == '-' as u8 {
-                strand = -1;}
-            else {
-                strand =  0
-            }
-            last_start = offset+1;
-            mode = 7;
-        }
-        else if (mode == 7) && (*b == ('\t' as u8)) { //red frame
-            last_start = offset+1;
-            mode = 8;
-        }
-        else if (mode == 8) && (*b == ' ' as u8) {
-            attribute_name = std::str::from_utf8(&bts[last_start..offset])?;
-            last_start = offset+1;
-            mode = 9;
-        }
-        else if (mode == 9) && (*b == ';' as u8) {
-            attribute_value = std::str::from_utf8(&bts[last_start+1..offset-2])?;
-            attributes.insert(attribute_name, attribute_value);
-            last_start = offset+1;
-            mode = 8;
-        }
-        else if (mode == 8) && (*b == ('\n' as u8)) {
-            count += 1;
-            mode = 0;
-            last_start = offset+1;
-
-            if !out.contains_key(feature) {
-                if (accepted_features.len() > 0) && (!accepted_features.contains(feature)) {
-                    continue;
-                }
-                let hm: GTFEntrys = GTFEntrys::new();
-                out.insert(feature.to_string(), hm);
-            }
-            let target = out.get_mut(feature).unwrap();
-            target.seqname.push(seqname);
-            target.start.push(start);
-            target.end.push(stop);
-            target.strand.push(strand);
-            }
-        offset += 1;
-    }
-    if mode != 0 {
-        println!("last line had no \n at the end");
-    }
-    println!("{}", count);
-
-
-
-    Ok(out)
-        */
     // this is good but it still iterates through parts of the input
     // three times!
     let f = File::open(filename)?;
@@ -192,15 +88,15 @@ fn inner_parse_ensembl_gtf_manual(
     let mut out: HashMap<String, GTFEntrys> = HashMap::new();
     for line in f.lines() {
         let line = line?;
-        if line.starts_with('#') || line.len() == 0 {
+        if line.starts_with('#') || line.is_empty() {
             continue;
         }
-        let mut parts = line.splitn(9, "\t");
+        let mut parts = line.splitn(9, '\t');
         let seqname = parts.next().ok_or("Failed to find seqname")?;
         parts.next(); //consume source
         let feature = parts.next().ok_or("Failed to find feature")?;
         if !out.contains_key(feature) {
-            if (accepted_features.len() > 0) && (!accepted_features.contains(feature)) {
+            if (!accepted_features.is_empty()) && (!accepted_features.contains(feature)) {
                 continue;
             }
             let hm: GTFEntrys = GTFEntrys::new();
@@ -227,8 +123,8 @@ fn inner_parse_ensembl_gtf_manual(
         let attributes = parts.next().ok_or("Failed to find attributes")?;
         let it = attributes
             .split_terminator(';')
-            .map(|x| x.trim_start())
-            .filter(|x| x.len() > 0);
+            .map(str::trim_start)
+            .filter(|x| !x.is_empty());
         for attr_value in it {
             let mut kv = attr_value.splitn(2, ' ');
             let mut key: &str = kv.next().unwrap();
@@ -316,10 +212,10 @@ fn parse_ensembl_gtf(
 ) -> PyResult<RustHashMap<String, GTFEntrys>> {
     let hm_accepted_features: HashSet<String> =
         HashSet::from_iter(accepted_features.iter().cloned());
-    let parse_result = inner_parse_ensembl_gtf_manual(filename, hm_accepted_features);
+    let parse_result = inner_parse_ensembl_gtf(filename, hm_accepted_features);
     match parse_result {
-        Ok(r) => return Ok(r),
-        Err(e) => return Err(PyErr::new::<ValueError, _>(e.to_string())),
+        Ok(r) => Ok(r),
+        Err(e) => Err(PyErr::new::<ValueError, _>(e.to_string())),
     }
 }
 
