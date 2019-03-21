@@ -1,6 +1,6 @@
 [package]
 name = "mbf_gtf"
-version = "0.1.0"
+version = "0.1.2"
 authors = ["Florian Finkernagel <finkernagel@imt.uni-marburg.de>"]
 
 [lib]
