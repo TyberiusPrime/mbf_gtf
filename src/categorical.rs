@@ -3,7 +3,7 @@ use std::collections::HashMap;
 
 use pyo3::prelude::*;
 use pyo3::IntoPyObject;
-use numpy::numpy_from_vec;
+use numpy::numpy_from_vec_u32;
 
 #[derive(Debug)]
 pub struct Categorical {
@@ -68,6 +68,6 @@ impl IntoPyObject for Categorical {
         sorted.sort_by(|a, b| a.1.cmp(b.1));
         let cats: Vec<String> = sorted.iter().map(|a| a.0.clone()).collect();
         //(self.values.into_object(py), cats.into_object(py)).into_object(py)
-        (numpy_from_vec(self.values).unwrap(), cats.into_object(py)).into_object(py)
+        (numpy_from_vec_u32(self.values).unwrap(), cats.into_object(py)).into_object(py)
     }
 }

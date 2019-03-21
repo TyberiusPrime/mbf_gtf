@@ -1,22 +1,27 @@
 #![feature(nll)]
 extern crate pyo3;
+extern crate hashbrown;
+
 
 use pyo3::prelude::*;
 use pyo3::wrap_pyfunction;
 use pyo3::{PyErr, PyResult};
-use std::collections::{HashMap, HashSet};
-use std::io::BufRead;
-
 use pyo3::exceptions::ValueError;
+use std::collections::HashMap as RustHashMap;
 use std::fs::File;
-
+use std::io::BufRead;
 use std::error;
 use std::iter::FromIterator;
+
+use hashbrown::{HashMap, HashSet}; //hashbrown offers a very modest speedup of about 0.7 seconds (from 10.28 to 9.5) 
 
 mod categorical;
 mod numpy;
 use categorical::Categorical;
-use numpy::numpy_from_vec;
+use numpy::{
+    numpy_from_vec_u64,
+    numpy_from_vec_i8
+};
 
 
 struct GTFEntrys {
@@ -44,14 +49,20 @@ impl GTFEntrys {
 }
 
 impl IntoPyObject for GTFEntrys {
-    fn into_object(self, py: Python) -> PyObject {
-        let mut hm = HashMap::new();
+    fn into_object(mut self, py: Python) -> PyObject {
+        let mut hm = RustHashMap::new();
         hm.insert("seqname", self.seqname.into_object(py));
-        hm.insert("start", self.start.into_object(py));
-        hm.insert("end", self.end.into_object(py));
-        hm.insert("strand", self.strand.into_object(py));
-        hm.insert("cat_attributes", self.cat_attributes.into_object(py));
-        hm.insert("vec_attributes", self.vec_attributes.into_object(py));
+        hm.insert("start", numpy_from_vec_u64(self.start).unwrap());
+                  //self.start.into_object(py));
+        hm.insert("end", 
+                  numpy_from_vec_u64(self.end).unwrap());
+                  //self.end.into_object(py));
+        hm.insert("strand", //self.strand.into_object(py));
+                  numpy_from_vec_i8(self.strand).unwrap());
+        let cat_attributes: RustHashMap<String, Categorical> = self.cat_attributes.drain().collect();
+        let vec_attributes: RustHashMap<String, Vec<String>> = self.vec_attributes.drain().collect();
+        hm.insert("cat_attributes", cat_attributes.into_object(py));
+        hm.insert("vec_attributes", vec_attributes.into_object(py));
         hm.into_object(py)
     }
 }
@@ -69,7 +80,113 @@ fn vector_new_empty_push(count: u32, value: String) -> Vec<String> {
 fn inner_parse_ensembl_gtf_manual(
     filename: &str,
     accepted_features: HashSet<String>,
-) -> Result<HashMap<String, GTFEntrys>, Box<error::Error>> {
+) -> Result<RustHashMap<String, GTFEntrys>, Box<error::Error>> {
+    /*
+    let input: String = std::fs::read_to_string(filename)?;
+    let mut out: HashMap<String, GTFEntrys> = HashMap::new();
+
+    let mut mode = 0;
+    let mut count = 0;
+    let mut offset:usize = 0;
+    let mut last_start:usize = 0;
+    let mut seqname: &str = "";
+    let mut feature: &str = "";
+    let mut start: u64 = 0;
+    let mut stop: u64 = 0;
+    let mut strand: i8 = 0;
+    let mut attribute_name: &str = "";
+    let mut attribute_value: &str = "";
+    let mut attributes: HashMap<&str, &str> = HashMap::new();
+    let bts = input.into_bytes();
+    let last_b: u8 = 0;
+    for b in bts.iter(){
+        if (mode == 0) && (*b == ('\t' as u8)) { //read seqname
+            seqname = std::str::from_utf8(&bts[last_start..offset])?;
+            last_start = offset+1;
+            mode = 1;
+        }
+        else if (mode == 1) && (*b == ('\t' as u8)) { //red source
+            //source = std::str::from_utf8(&bts[last_start..offset])?; 
+            last_start = offset+1;
+            mode = 2;
+        }
+        else if (mode == 2) && (*b == ('\t' as u8)) { //read feature
+            feature = std::str::from_utf8(&bts[last_start..offset])?;
+            last_start = offset+1;
+            mode = 3;
+        }
+        else if (mode == 3) && (*b == ('\t' as u8)) { //read start
+            start = std::str::from_utf8(&bts[last_start..offset])?.parse()?;
+            last_start = offset+1;
+            mode = 4;
+        }
+        else if (mode == 4) && (*b == ('\t' as u8)) { //read stop
+            stop = std::str::from_utf8(&bts[last_start..offset])?.parse()?;
+            last_start = offset+1;
+            mode = 5;
+        }
+        else if (mode == 5) && (*b == ('\t' as u8)) { //read score
+            last_start = offset+1;
+            mode = 6;
+        }
+        else if (mode == 6) && (*b == ('\t' as u8)) { //read strand
+            if bts[last_start] == '+' as u8 {
+                strand = 1;
+            }
+            else if bts[last_start] == '-' as u8 {
+                strand = -1;}
+            else {
+                strand =  0
+            }
+            last_start = offset+1;
+            mode = 7;
+        }
+        else if (mode == 7) && (*b == ('\t' as u8)) { //red frame
+            last_start = offset+1;
+            mode = 8;
+        }
+        else if (mode == 8) && (*b == ' ' as u8) {
+            attribute_name = std::str::from_utf8(&bts[last_start..offset])?;
+            last_start = offset+1;
+            mode = 9;
+        }
+        else if (mode == 9) && (*b == ';' as u8) {
+            attribute_value = std::str::from_utf8(&bts[last_start+1..offset-2])?;
+            attributes.insert(attribute_name, attribute_value);
+            last_start = offset+1;
+            mode = 8;
+        }
+        else if (mode == 8) && (*b == ('\n' as u8)) {
+            count += 1;
+            mode = 0;
+            last_start = offset+1;
+
+            if !out.contains_key(feature) {
+                if (accepted_features.len() > 0) && (!accepted_features.contains(feature)) {
+                    continue;
+                }
+                let hm: GTFEntrys = GTFEntrys::new();
+                out.insert(feature.to_string(), hm);
+            }
+            let target = out.get_mut(feature).unwrap();
+            target.seqname.push(seqname);
+            target.start.push(start);
+            target.end.push(stop);
+            target.strand.push(strand);
+            }
+        offset += 1;
+    }
+    if mode != 0 {
+        println!("last line had no \n at the end");
+    }
+    println!("{}", count);
+
+
+
+    Ok(out)
+        */
+    // this is good but it still iterates through parts of the input
+    // three times!
     let f = File::open(filename)?;
     let f = std::io::BufReader::new(f);
     let mut out: HashMap<String, GTFEntrys> = HashMap::new();
@@ -114,7 +231,7 @@ fn inner_parse_ensembl_gtf_manual(
             .filter(|x| x.len() > 0);
         for attr_value in it {
             let mut kv = attr_value.splitn(2, ' ');
-            let mut key = kv.next().unwrap();
+            let mut key: &str = kv.next().unwrap();
             if key == "tag" {
                 if feature != "transcript"{ // only transcripts have tags!
                     continue;
@@ -143,8 +260,10 @@ fn inner_parse_ensembl_gtf_manual(
             {
                 continue;
             }
-            let value = kv.next().unwrap().trim_matches('"');
-            if key.ends_with("_id") {
+            let value: &str = kv.next().unwrap().trim_matches('"');
+            if key.ends_with("_id") { // vec vs categorical seems to be almost performance neutral
+                //just htis push here (and I guess the fill-er-up below
+                //takes about 3 seconds.
                 target
                     .vec_attributes
                     .get_mut(key)
@@ -157,7 +276,7 @@ fn inner_parse_ensembl_gtf_manual(
                             vector_new_empty_push(target.count, value.to_string()),
                         );
                     });
-            } else {
+            } else { // these tributes take about 1.5s to store (nd fill-er-up)
                 target
                     .cat_attributes
                     .get_mut(key)
@@ -185,7 +304,8 @@ fn inner_parse_ensembl_gtf_manual(
         }
     }
 
-    Ok(out)
+    let res: RustHashMap<String, GTFEntrys> = out.drain().collect();
+    Ok(res)
 }
 
 #[pyfunction]
@@ -193,7 +313,7 @@ fn inner_parse_ensembl_gtf_manual(
 fn parse_ensembl_gtf(
     filename: &str,
     accepted_features: Vec<String>,
-) -> PyResult<HashMap<String, GTFEntrys>> {
+) -> PyResult<RustHashMap<String, GTFEntrys>> {
     let hm_accepted_features: HashSet<String> =
         HashSet::from_iter(accepted_features.iter().cloned());
     let parse_result = inner_parse_ensembl_gtf_manual(filename, hm_accepted_features);
@@ -204,16 +324,11 @@ fn parse_ensembl_gtf(
 }
 
 
-#[pyfunction]
-fn return_numpy() -> PyResult<PyObject> {
-    numpy_from_vec(vec![1, 2, 3 as u32])
-}
 
 /// This module is a python module implemented in Rust.
 #[pymodule]
 fn mbf_gtf(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_wrapped(wrap_pyfunction!(parse_ensembl_gtf))?;
-    m.add_wrapped(wrap_pyfunction!(return_numpy))?;
 
     Ok(())
 }
