@@ -263,6 +263,7 @@ def all_to_pandas(dict_of_frames):
 #[pymodule]
 fn mbf_gtf(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_wrapped(wrap_pyfunction!(parse_ensembl_gtf))?;
+    m.add("__version__", env!("CARGO_PKG_VERSION"));
 
     Ok(())
 }
