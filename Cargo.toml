@@ -6,7 +6,7 @@ description = "Fast Parser for Ensembl formated GTF Files to Pandas DataFrames"
 repository = "https://github.com/TyberiusPrime/mbf_gtf"
 readme = "Readme.md"
 keywords = ["gtf"]
-licence = "MIT"
+license = "MIT"
 
 [lib]
 crate-type=["cdylib"]
