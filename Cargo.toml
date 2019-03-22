@@ -14,6 +14,7 @@ name = "mbf_gtf"
 
 [dependencies]
 hashbrown = "0.1"
+flate2 = "1.0.7"
 
 [dependencies.pyo3]
 version = "0.6.0-alpha.4"

@@ -1,10 +1,11 @@
 #![feature(nll)]
 extern crate pyo3;
 extern crate hashbrown;
+extern crate flate2;
 
 use std::collections::HashMap as RustHashMap;
 use std::fs::File;
-use std::io::BufRead;
+use std::io::{BufRead, Read, BufReader};
 use std::error;
 use std::iter::FromIterator;
 
@@ -15,6 +16,7 @@ use pyo3::exceptions::ValueError;
 use pyo3::types::{PyDict, PyTuple};
 
 use hashbrown::{HashMap, HashSet}; //hashbrown offers a very modest speedup of about 0.7 seconds (from 10.28 to 9.5) 
+use flate2::read::GzDecoder;
 
 mod categorical;
 mod numpy;
@@ -85,7 +87,11 @@ fn inner_parse_ensembl_gtf(
     // this is good but it still iterates through parts of the input
     // three times!
     let f = File::open(filename)?;
-    let f = std::io::BufReader::new(f);
+    let f: Box<Read> = if filename.ends_with(".gz") {
+        Box::new(GzDecoder::new(f))
+    } else {Box::new(f)};
+
+    let f = BufReader::new(f);
     let mut out: HashMap<String, GTFEntrys> = HashMap::new();
     for line in f.lines() {
         let line = line?;
@@ -230,6 +236,7 @@ fn parse_ensembl_gtf(
     py.run("
     
 def all_to_pandas(dict_of_frames):
+    import pandas as pd
     result = {}
     for k, frame in dict_of_frames.items():
         d = {
@@ -263,7 +270,7 @@ def all_to_pandas(dict_of_frames):
 #[pymodule]
 fn mbf_gtf(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_wrapped(wrap_pyfunction!(parse_ensembl_gtf))?;
-    m.add("__version__", env!("CARGO_PKG_VERSION"));
+    m.add("__version__", env!("CARGO_PKG_VERSION"))?;
 
     Ok(())
 }
