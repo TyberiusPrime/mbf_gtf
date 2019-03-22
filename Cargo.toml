@@ -1,7 +1,12 @@
 [package]
 name = "mbf_gtf"
-version = "0.1.2"
+version = "0.1.3"
 authors = ["Florian Finkernagel <finkernagel@imt.uni-marburg.de>"]
+description = "Fast Parser for Ensembl formated GTF Files to Pandas DataFrames"
+repository = "https://github.com/TyberiusPrime/mbf_gtf"
+readme = "Readme.md"
+keywords = ["gtf"]
+licence = "MIT"
 
 [lib]
 crate-type=["cdylib"]
