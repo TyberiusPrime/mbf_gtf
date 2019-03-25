@@ -110,6 +110,7 @@ fn inner_parse_ensembl_gtf(
             out.insert(feature.to_string(), hm);
         }
         let start: u64 = parts.next().ok_or("Failed to find start")?.parse()?;
+        let start = start -1;
         let end: u64 = parts.next().ok_or("Failed to find start")?.parse()?;
         parts.next(); //consume score
         let strand = parts.next().ok_or("Failed to find start")?;
